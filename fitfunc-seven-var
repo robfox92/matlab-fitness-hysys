@@ -1,4 +1,12 @@
 function [fitnessV] = fitfunction(GAin)
+
+
+%Function to allow MATLAB to control specific variables in a HYSYS simulation
+%Optimizes refrigerant composition in order to minimize recompression loading in a model of a C3MR LNG plant
+
+
+
+
 %GAin = [c1flow, c2flow, c3flow, n2flow, mrflow, MRsplit, MCHEdP]
 %fitfunction Fitness function based on compressor loading, meeting
 %minimum approach constraints of 2.5C<min app<3.5C and meeting outlet
