@@ -1,0 +1,251 @@
+function [fitnessV] = fitfunction(GAin)
+%GAin = [c1flow, c2flow, c3flow, n2flow, mrflow, MRsplit, MCHEdP]
+%fitfunction Fitness function based on compressor loading, meeting
+%minimum approach constraints of 2.5C<min app<3.5C and meeting outlet
+%vapour fraction spec of 1.000
+%Requires specifically formatted spreadsheets
+%Opens the open HYSYS case, so only have one case open at a time.
+
+%Unpack input variables
+newC1 = GAin(1);
+newC2 = GAin(2);
+newC3 = GAin(3);
+newN2 = GAin(4);
+newMR = GAin(5);
+newMRsplit = GAin(6);
+newMCHEdP = GAin(7);
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%   hysyslib functions   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%hyconnect function - connects to hysys - no arguments for currently open
+%case
+function hyapp = hyconnect(FileNameString, VisibleBoolean)
+hy  = feval('actxserver', 'Hysys.Application');
+
+    if nargin <= 1
+       hy.Visible = 1;
+    else
+       hy.Visible = VisibleBoolean;
+    end
+
+
+% This try/catch clause does not work yet. Only a dispatch warning is
+% issued.
+%
+    try
+     if nargin > 0
+      invoke (hy.SimulationCases, 'Open', FileNameString);  
+     end
+    catch
+      lasterr;
+      disp('Check the path of the filename. If file is not in');
+      disp('local directory, include full path to file');
+    end
+
+hyapp = hy;
+end
+
+%hyspread function - loads a spreadsheet in connected hysys case
+function SpreadsheetObject = hyspread(ApplicationObject, SpreadsheetNameString)
+    SpreadsheetObject = get ... 
+                    (ApplicationObject.ActiveDocument.Flowsheet.Operations,...
+                     'Item', SpreadsheetNameString);
+end
+
+%hycell function - loads a 1x1 cell from a specified hysys spreadsheet
+function CellObject = hycell(SpreadsheetObject, CellNameString)
+       CellObject = {};
+
+if isa(CellNameString, 'cell')
+  for n1 = 1:size(CellNameString,1)
+    for n2 = 1:size(CellNameString,2)
+    CellObject{n1,n2} = get (SpreadsheetObject, 'Cell', CellNameString{n1,n2});
+    end
+  end
+else 
+  CellObject{1} = get (SpreadsheetObject, 'Cell', CellNameString);
+end
+end
+
+
+%hyvalue function - returns a 
+function CellValue = hyvalue(CellObject)
+    if isa(CellObject, 'cell')
+  for n1 = 1:size(CellObject,1)
+    for n2 = 1:size(CellObject,2)
+%      if isa(CellObject{n1,n2}, 'activex')
+	CellValue(n1,n2) = CellObject{n1,n2}.CellValue;
+%      end
+    end
+  end
+else
+  CellValue = CellObject.CellValue;
+    end
+end
+
+%hyset function - sets a value in a HYSYS spreadsheet
+function hyset(CellObjects, Value)
+    if isa(CellObjects, 'cell')
+  for n1 = 1:size(CellObjects,1)
+    for n2 = 1:size(CellObjects,2)
+   %   if isa(CellObject{n1,n2}, 'activex')
+	CellObjects{n1,n2}.CellValue = Value(n1,n2);
+   %  end
+    end
+  end
+else
+  CellObjects.CellValue = Value;
+end
+end
+
+%hyissolving function - checks if the HYSYS solver is running
+function solveboolean = hyissolving(ApplicationObject)
+    hysolver = ApplicationObject.ActiveDocument.Solver;
+solveboolean = - hysolver.issolving;
+end
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Connects to the open HYSYS case and opens spreadsheets GA-DATA
+
+%Connect to HYSYS
+
+if (newC1 >= 0 && newC2 >= 0 && newC3 >= 0 && newN2 >= 0 && newMR > 0 && newMRsplit > 0 && newMCHEdP > 0 && newMRsplit > newMCHEdP )
+    %check if all inputs are positive, if not all are positive then returns
+    %infinity and does not inut the values in to HYSYS as negative inputs 
+    %will break the simulation, also ensures the MCHE dP is less than the
+    %initial pressure, ensuring no negative pressures are encountered
+    
+
+    hyconnect;
+
+    %Opens the GA-DATA spreadsheet as gadata
+    gadata = hyspread(COM.HYSYS_Application, 'GA-DATA');
+    %sets mr flow variables in matlab
+    c1flow = hycell(gadata, 'B2'); 
+    c2flow = hycell(gadata, 'B3');
+    c3flow = hycell(gadata, 'B4');
+    n2flow = hycell(gadata, 'B5');
+    totalflow = hycell(gadata, 'B6');
+    totalcomp = hycell(gadata, 'C6');
+    MRsplitP = hycell(gadata, 'B7');
+    MCHEdP = hycell(gadata, 'B8');
+
+
+    %Pass inputs to HYSYS
+    hyset(c1flow, newC1);
+    hyset(c2flow, newC2);
+    hyset(c3flow, newC3);
+    hyset(n2flow, newN2);
+    hyset(totalflow, newMR);
+    hyset(MRsplitP, newMRsplit);
+    hyset(MCHEdP, newMCHEdP);
+
+    %pause for 1 second to allow HYSYS to solve
+    pause(1);
+
+
+
+    %returning model values
+    MAwarmcell = hycell(gadata, 'E2');
+    MAcoldcell = hycell (gadata, 'F2');
+    OutletVF = hycell (gadata, 'E4');
+   fail = 1;
+   %try/catch is used to allow for instances where the HYSYS cell has a value
+   %of "<empty>", otherwise function crashes if a cell has that value 
+   try 
+    MAwarmVAL = hyvalue(MAwarmcell);
+    MAcoldVAL = hyvalue (MAcoldcell);
+    OutletVFval = hyvalue(OutletVF);
+   catch exception
+    MAwarmVAL = 100000;
+    MAcoldVAL = 100000;
+    OutletVFval = 0.1;
+    
+   end
+    
+   
+    LPduty = hycell(gadata, 'E7');
+    HPduty = hycell(gadata, 'E8');
+    mrduty = hycell(gadata, 'E9');          
+    
+   %try/catch is used to allow for instances where the HYSYS cell has a value
+   %of "<empty>", otherwise function crashes if a cell has that value
+    try
+        mrdutyVAL = hyvalue (mrduty);                                
+    catch exception
+        mrdutyVAL = 1e30;
+        %returns 1e30 as the MR duty if HYSYS can't return it
+    end
+    
+    try
+        LPdutyVAL = hyvalue (LPduty);                                
+    catch exception
+        LPdutyVAL = -1;
+        %returns 1e30 as the LP duty if HYSYS can't return it
+    end
+    
+    try
+    HPdutyVAL = hyvalue (HPduty);                                
+    catch exception
+        HPdutyVAL = -1;
+        %returns 1e30 as the HP duty if HYSYS can't return it
+    end
+    
+
+    %Generates fitness function result
+        %No penalty for Warm MA in range 2.5<MA<3.5, linear penalty for
+        %being out of that range
+        if MAwarmVAL > 2.5 && 3.5 > MAwarmVAL
+            MAwarmSCAL = 1;
+        else MAwarmSCAL = 2*(abs(MAwarmVAL-3))+1;
+        end
+        
+        %No penalty for Cold MA in range 2.5<MA<3.5, linear penalty for
+        %being out of that range
+        if MAcoldVAL > 2.5 && 3.5 > MAcoldVAL
+            MAcoldSCAL = 1;
+        else MAcoldSCAL = 2*(abs(MAcoldVAL-3))+1; 
+        end
+        
+    %Fitness is a function of the recompression duty, the MA penalties, the
+    %outlet vapour fraction and a scaling factor of 2e-3.  This makes the
+    %fitness numbers on the scale of 100, which is more human-readable
+    result = mrdutyVAL * MAwarmSCAL * MAcoldSCAL* (exp(1000*(1-OutletVFval)))/(2e3);
+    
+    %Applies penalties for not meeting constraints - no temperature crosses
+    
+    if (MAwarmVAL < 0) || (MAcoldVAL < 0)
+       if (MAwarmVAL < 0 && MAcoldVAL <0)
+           fitness = (1+result)*1e20; 
+           %multiplies result by 1e20 if no miminum approaches are positive 
+           %this means both LNG exchangers have a temperature cross
+       else    
+        fitness = (1+result)*1e10; 
+        %multiplies result by 1e10 if only one minimum approach is positive
+        %this means one LNG exchanger has a temperature cross
+       end
+    else
+        fitness = abs(result); 
+        %if all constraints are met, no penalties applied
+    end
+    
+    if (LPdutyVAL < 0 || HPdutyVAL < 0)
+        fitness = abs((1+result)*1e20);
+    else    
+        fitness = abs(result);
+    end
+else
+    fitness = Inf;
+    %if the inputs are invalid, fitness is very large (infinity)
+end
+%fitnessV=[fitness, MAcoldVAL, MAwarmVAL];
+fitnessV=fitness;
+%display the current member - inputs, fitness, min approaches and 
+member=[GAin(1),GAin(2),GAin(3),GAin(4),GAin(5),GAin(6),GAin(7), fitnessV];
+end
+
